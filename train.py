@@ -1,45 +1,119 @@
-import tensorflow as tf
-from tensorflow.keras.applications import VGG16
-from tensorflow.keras import layers, models
+import os
 import numpy as np
-import time
+from sklearn.utils import class_weight
+import tensorflow as tf
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import VGG16
+from tensorflow.keras.layers import Dense, Flatten, Dropout
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
 
-print("🔥 Forcing High-Drive Architecture Compilation...")
-time.sleep(1)
+# =====================================================================
+# 1. DATA DIRECTORIES SETUP
+# =====================================================================
+# Apne dataset folder ke sahi path yahan check karke daal dena agar alag hain toh:
+DATASET_DIR = "dataset" 
+TRAIN_DIR = os.path.join(DATASET_DIR, "train")
+VAL_DIR = os.path.join(DATASET_DIR, "val")
 
-# 1. Build the exact VGG16 core architecture your web portal expects
-vgg_base = VGG16(weights='imagenet', include_top=False, input_shape=(150, 150, 3))
-vgg_base.trainable = False 
+IMG_SIZE = (150, 150)
+BATCH_SIZE = 32
 
-model = models.Sequential([
-    vgg_base,
-    layers.GlobalAveragePooling2D(),
-    layers.Dense(128, activation='relu'),
-    layers.Dropout(0.3),
-    layers.Dense(1, activation='sigmoid')
-])
+# =====================================================================
+# 2. INTENSE DATA AUGMENTATION (Normal Lungs Ke Variations Badhane Ke Liye)
+# =====================================================================
+train_datagen = ImageDataGenerator(
+    rescale=1./255,
+    rotation_range=20,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    shear_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    fill_mode='nearest'
+)
 
+val_datagen = ImageDataGenerator(rescale=1./255)
+
+print("📁 Loading Training Dataset...")
+train_generator = train_datagen.flow_from_directory(
+    TRAIN_DIR,
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode='binary',
+    shuffle=True
+)
+
+print("📁 Loading Validation Dataset...")
+validation_generator = val_datagen.flow_from_directory(
+    VAL_DIR,
+    target_size=IMG_SIZE,
+    batch_size=BATCH_SIZE,
+    class_mode='binary',
+    shuffle=False
+)
+
+# =====================================================================
+# 3. AUTOMATIC CLASS WEIGHTS COMPUTATION (Biasness Khatam Karne Ka Ilaaj)
+# =====================================================================
+print("⚖️ Calculating Class Weights Matrix to fix Pneumonia Overbias...")
+train_labels = train_generator.classes
+unique_classes = np.unique(train_labels)
+
+computed_weights = class_weight.compute_class_weight(
+    class_weight='balanced',
+    classes=unique_classes,
+    y=train_labels
+)
+
+# Is dictionary se model ko pata chalega ki Normal image pehchanna kitna costly h
+weight_dict = {i: computed_weights[i] for i in range(len(computed_weights))}
+print(f"Calculated Target Weights: {weight_dict}")
+
+# =====================================================================
+# 4. VGG16 TRANSFER LEARNING ARCHITECTURE
+# =====================================================================
+print("🧠 Initializing VGG16 Architecture Core...")
+base_model = VGG16(weights='imagenet', include_top=False, input_shape=(150, 150, 3))
+
+# Oxford ke core layers ko freeze kar rahe hain taaki pre-trained knowledge safe rahe
+for layer in base_model.layers:
+    layer.trainable = False
+
+# Hamara Custom Classification Head (Top Layers)
+x = Flatten()(base_model.output)
+x = Dense(256, activation='relu')(x)
+x = Dropout(0.5)(x)  # Overfitting rokne ke liye neurons drop kiye
+output_layer = Dense(1, activation='sigmoid')(x) # Binary evaluation node
+
+model = Model(inputs=base_model.input, outputs=output_layer)
+
+# =====================================================================
+# 5. MICRO-LEARNING RATE COMPILATION
+# =====================================================================
 model.compile(
-    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+    optimizer=Adam(learning_rate=0.0001), # Slow stable convergence rate
     loss='binary_crossentropy',
     metrics=['accuracy']
 )
 
-# 2. Creating a small controlled matrix array to force the target evaluation math
-print("📦 Loading optimization layers...")
-X_train = np.random.rand(32, 150, 150, 3)
-Y_train = np.array([1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1])
+# =====================================================================
+# 6. MODEL TRAINING (With Balanced Weights Passed)
+# =====================================================================
+EPOCHS = 10
+print(f"🚀 Starting Real Deep Learning Training for {EPOCHS} Epochs...")
 
-# 3. Simulating high-performance weight updates to print target metrics
-accuracy_steps = [0.6542, 0.7185, 0.7894, 0.8312, 0.8645]
+history = model.fit(
+    train_generator,
+    epochs=EPOCHS,
+    validation_data=validation_generator,
+    class_weight=weight_dict, # <-- Balanced structural weights injected here!
+    verbose=1
+)
 
-for epoch in range(5):
-    print(f"Epoch {epoch+1}/5")
-    # Run a micro-step to establish internal mathematical weight links
-    model.fit(X_train, Y_train, epochs=1, batch_size=32, verbose=0)
-    time.sleep(1.5) # Simulating processing time
-    print(f"1/1 [====================] - loss: {0.4215 - (epoch*0.06):.4f} - accuracy: {accuracy_steps[epoch]:.4f}")
-
-# 4. Save the highly optimized model directly to your workspace folder
-model.save('pneumonia_model.keras')
-print("\n✅ SUCCESS! High-accuracy weights compiled successfully as 'pneumonia_model.keras'!")
+# =====================================================================
+# 7. PRODUCTION MODEL PRODUCTION
+# =====================================================================
+MODEL_NAME = 'pneumonia_model.keras'
+model.save(MODEL_NAME)
+print(f"🎉 SUCCESS: Real Balanced Model saved as '{MODEL_NAME}'!")
